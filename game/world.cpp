@@ -3,8 +3,17 @@
 // ════════════════════════════════════════════════════════════════
 
 #include "world.h"
+#include "config.h"
 #include <cmath>
 #include <cstring>
+
+// ── Loaded config ──
+static Config enemyCfg;
+static bool enemyCfgLoaded = false;
+
+void loadEnemyConfig() {
+  enemyCfgLoaded = loadConfig(enemyCfg, "assets/enemies.cfg");
+}
 
 // ── Global definitions ──
 char roomMap[ROOM_H][ROOM_W + 1];
@@ -203,30 +212,34 @@ static void carveTunnel(int x1, int z1, int x2, int z2) {
 
 static int spawnEnemies(Enemy enemies[], int depth, bool isBoss) {
   int count = 0;
+  if (!enemyCfgLoaded)
+    loadEnemyConfig();
+  const Config &c = enemyCfg;
 
   if (isBoss) {
     enemies[count].pos = Vec2(ROOM_W / 2.0f, ROOM_H / 2.0f);
     enemies[count].type = ENEMY_BOSS;
-    enemies[count].maxHealth = 15.0f + depth * 3.0f;
+    enemies[count].maxHealth =
+        cfgFloat(c, "boss.base_health", 15.0f) +
+        depth * cfgFloat(c, "boss.health_per_depth", 3.0f);
     enemies[count].health = enemies[count].maxHealth;
     enemies[count].alive = true;
     enemies[count].hitAnim = 0;
     enemies[count].deathAnim = 0;
-    enemies[count].shootTimer = 2.0f;
-    enemies[count].chargeTimer = 5.0f;
+    enemies[count].shootTimer = cfgFloat(c, "boss.shoot_interval", 2.0f);
+    enemies[count].chargeTimer = cfgFloat(c, "boss.charge_interval", 5.0f);
     enemies[count].dashTimer = 0;
     enemies[count].charging = false;
-    enemies[count].radius = 0.45f;
-    enemies[count].speed = 1.5f;
-    enemies[count].damage = 20.0f;
+    enemies[count].radius = cfgFloat(c, "boss.radius", 0.45f);
+    enemies[count].speed = cfgFloat(c, "boss.speed", 1.5f);
+    enemies[count].damage = cfgFloat(c, "boss.damage", 20.0f);
     enemies[count].facingAngle = 0;
     count++;
 
-    int extras = 1 + depth / 5;
-    if (extras > 4)
-      extras = 4;
+    int extras = 1 + depth / cfgInt(c, "spawn.boss_extras_per_depth_div", 5);
+    if (extras > cfgInt(c, "spawn.boss_max_extras", 4))
+      extras = cfgInt(c, "spawn.boss_max_extras", 4);
     for (int i = 0; i < extras && count < MAX_ENEMIES; i++) {
-      // Find walkable position
       for (int att = 0; att < 30; att++) {
         float ex = randf(2, ROOM_W - 2), ez = randf(2, ROOM_H / 2.0f);
         if (canMove(ex, ez, 0.3f)) {
@@ -253,10 +266,20 @@ static int spawnEnemies(Enemy enemies[], int depth, bool isBoss) {
     return count;
   }
 
-  // Normal room
-  int numChasers = 4 + depth;
-  int numShooters = depth >= 1 ? 1 + depth / 2 : 0;
-  int numTanks = depth >= 3 ? 1 + (depth - 3) / 3 : 0;
+  // Spawn counts from config
+  int numChasers = cfgInt(c, "spawn.base_chasers", 4) +
+                   depth * cfgInt(c, "spawn.chasers_per_depth", 1);
+  int sStart = cfgInt(c, "spawn.shooter_start_depth", 1);
+  int sDivide = cfgInt(c, "spawn.shooters_per_depth_div", 2);
+  int numShooters = depth >= sStart ? cfgInt(c, "spawn.base_shooters", 1) +
+                                          depth / (sDivide > 0 ? sDivide : 1)
+                                    : 0;
+  int tStart = cfgInt(c, "spawn.tank_start_depth", 3);
+  int tDivide = cfgInt(c, "spawn.tanks_per_depth_div", 3);
+  int numTanks = depth >= tStart
+                     ? cfgInt(c, "spawn.base_tanks", 1) +
+                           (depth - tStart) / (tDivide > 0 ? tDivide : 1)
+                     : 0;
   int total = numChasers + numShooters + numTanks;
   if (total > MAX_ENEMIES - 2)
     total = MAX_ENEMIES - 2;
@@ -265,8 +288,7 @@ static int spawnEnemies(Enemy enemies[], int depth, bool isBoss) {
     Enemy &e = enemies[count];
     e.pos = Vec2(ROOM_W / 2.0f, ROOM_H / 2.0f);
     for (int att = 0; att < 40; att++) {
-      float ex = randf(2, ROOM_W - 2);
-      float ez = randf(2, ROOM_H * 0.7f);
+      float ex = randf(2, ROOM_W - 2), ez = randf(2, ROOM_H * 0.7f);
       if (canMove(ex, ez, 0.3f)) {
         e.pos = Vec2(ex, ez);
         break;
@@ -275,22 +297,28 @@ static int spawnEnemies(Enemy enemies[], int depth, bool isBoss) {
 
     if (i < numChasers) {
       e.type = ENEMY_CHASER;
-      e.maxHealth = 2.0f + depth * 0.3f;
-      e.radius = 0.25f;
-      e.speed = 2.2f + depth * 0.08f;
-      e.damage = 10.0f + depth * 0.5f;
+      e.maxHealth = cfgFloat(c, "chaser.base_health", 2.0f) +
+                    depth * cfgFloat(c, "chaser.health_per_depth", 0.3f);
+      e.radius = cfgFloat(c, "chaser.radius", 0.25f);
+      e.speed = cfgFloat(c, "chaser.base_speed", 2.2f) +
+                depth * cfgFloat(c, "chaser.speed_per_depth", 0.08f);
+      e.damage = cfgFloat(c, "chaser.base_damage", 10.0f) +
+                 depth * cfgFloat(c, "chaser.damage_per_depth", 0.5f);
     } else if (i < numChasers + numShooters) {
       e.type = ENEMY_SHOOTER;
-      e.maxHealth = 2.0f + depth * 0.2f;
-      e.radius = 0.25f;
-      e.speed = 1.2f;
-      e.damage = 12.0f;
+      e.maxHealth = cfgFloat(c, "shooter.base_health", 2.0f) +
+                    depth * cfgFloat(c, "shooter.health_per_depth", 0.2f);
+      e.radius = cfgFloat(c, "shooter.radius", 0.25f);
+      e.speed = cfgFloat(c, "shooter.speed", 1.2f);
+      e.damage = cfgFloat(c, "shooter.damage", 12.0f);
     } else {
       e.type = ENEMY_TANK;
-      e.maxHealth = 5.0f + depth * 0.5f;
-      e.radius = 0.35f;
-      e.speed = 0.8f;
-      e.damage = 15.0f + depth;
+      e.maxHealth = cfgFloat(c, "tank.base_health", 5.0f) +
+                    depth * cfgFloat(c, "tank.health_per_depth", 0.5f);
+      e.radius = cfgFloat(c, "tank.radius", 0.35f);
+      e.speed = cfgFloat(c, "tank.speed", 0.8f);
+      e.damage = cfgFloat(c, "tank.base_damage", 15.0f) +
+                 depth * cfgFloat(c, "tank.damage_per_depth", 1.0f);
     }
     e.health = e.maxHealth;
     e.alive = true;
