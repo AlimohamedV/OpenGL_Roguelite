@@ -1,0 +1,21 @@
+# Executables
+*.exe
+*.out
+
+# Object files
+*.o
+*.obj
+
+# Binary data
+*.bin
+
+# IDE
+.vscode/
+
+# Build artifacts
+*.ilk
+*.pdb
+
+# System
+Thumbs.db
+.DS_Store
