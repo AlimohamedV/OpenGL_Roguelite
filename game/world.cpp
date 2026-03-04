@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstring>
 
-
 // ── Global definitions ──
 char roomMap[ROOM_H][ROOM_W + 1];
 Vec2 flowField[ROOM_H][ROOM_W];
@@ -72,27 +71,21 @@ void computeFlowField(float playerX, float playerZ) {
   while (head < tail) {
     BfsNode cur = bfsQueue[head++];
     int curDist = flowDist[cur.z][cur.x];
-
     for (int d = 0; d < 8; d++) {
-      int nx = cur.x + dx8[d];
-      int nz = cur.z + dz8[d];
-
+      int nx = cur.x + dx8[d], nz = cur.z + dz8[d];
       if (nx < 0 || nx >= ROOM_W || nz < 0 || nz >= ROOM_H)
         continue;
       if (flowVisited[nz][nx])
         continue;
       if (isWall(nx, nz))
         continue;
-
       if (dx8[d] != 0 && dz8[d] != 0) {
         if (isWall(cur.x + dx8[d], cur.z) || isWall(cur.x, cur.z + dz8[d]))
           continue;
       }
-
       flowVisited[nz][nx] = true;
       flowDist[nz][nx] = curDist + 1;
-      float fdx = (float)(cur.x - nx);
-      float fdz = (float)(cur.z - nz);
+      float fdx = (float)(cur.x - nx), fdz = (float)(cur.z - nz);
       float len = sqrtf(fdx * fdx + fdz * fdz);
       if (len > 0.01f)
         flowField[nz][nx] = Vec2(fdx / len, fdz / len);
@@ -109,84 +102,110 @@ Vec2 getFlowDirection(float wx, float wz) {
 }
 
 // ════════════════════════════════════════
-//  ROOM GENERATION
+//  CELLULAR AUTOMATA ROOM GENERATION
 // ════════════════════════════════════════
 
-static void fillWalls() {
-  for (int z = 0; z < ROOM_H; z++)
-    for (int x = 0; x < ROOM_W; x++)
-      roomMap[z][x] = '#';
-  for (int z = 0; z < ROOM_H; z++)
-    roomMap[z][ROOM_W] = '\0';
-}
+static char tempMap[ROOM_H][ROOM_W];
 
-static void carveArena(int depth) {
-  int pad = 3 - depth / 3;
-  if (pad < 1)
-    pad = 1;
-  for (int z = pad; z < ROOM_H - pad; z++)
-    for (int x = pad; x < ROOM_W - pad; x++)
-      roomMap[z][x] = '.';
-}
-
-static void placeObstacles(int count, int pad) {
-  for (int i = 0; i < count; i++) {
-    int cx = randi(pad + 2, ROOM_W - pad - 3);
-    int cz = randi(pad + 2, ROOM_H - pad - 3);
-    int shape = randi(0, 4);
-
-    switch (shape) {
-    case 0:
-      roomMap[cz][cx] = '#';
-      break;
-    case 1:
-      roomMap[cz][cx] = '#';
-      roomMap[cz + 1][cx] = '#';
-      roomMap[cz][cx + 1] = '#';
-      break;
-    case 2:
-      roomMap[cz][cx] = '#';
-      roomMap[cz][cx + 1] = '#';
-      roomMap[cz][cx - 1] = '#';
-      roomMap[cz + 1][cx] = '#';
-      break;
-    case 3:
-      for (int dx = 0; dx < randi(2, 3); dx++)
-        if (cx + dx < ROOM_W - pad - 1)
-          roomMap[cz][cx + dx] = '#';
-      break;
-    case 4:
-      for (int dz = 0; dz < randi(2, 3); dz++)
-        if (cz + dz < ROOM_H - pad - 1)
-          roomMap[cz + dz][cx] = '#';
-      break;
-    }
-  }
-
-  // Clear player start area
+static int countWallNeighbors(int x, int z) {
+  int count = 0;
   for (int dz = -1; dz <= 1; dz++)
     for (int dx = -1; dx <= 1; dx++) {
-      int x = ROOM_W / 2 + dx;
-      int z = ROOM_H - pad - 2 + dz;
+      if (dx == 0 && dz == 0)
+        continue;
+      int nx = x + dx, nz = z + dz;
+      if (nx < 0 || nx >= ROOM_W || nz < 0 || nz >= ROOM_H)
+        count++;
+      else if (roomMap[nz][nx] == '#')
+        count++;
+    }
+  return count;
+}
+
+static void smoothPass() {
+  for (int z = 0; z < ROOM_H; z++)
+    for (int x = 0; x < ROOM_W; x++)
+      tempMap[z][x] = (countWallNeighbors(x, z) >= 5) ? '#' : '.';
+  for (int z = 1; z < ROOM_H - 1; z++)
+    for (int x = 1; x < ROOM_W - 1; x++)
+      roomMap[z][x] = tempMap[z][x];
+}
+
+static bool floodVisitedCA[ROOM_H][ROOM_W];
+
+static int floodFillFrom(int sx, int sz) {
+  if (sx < 0 || sx >= ROOM_W || sz < 0 || sz >= ROOM_H)
+    return 0;
+  if (roomMap[sz][sx] == '#')
+    return 0;
+  memset(floodVisitedCA, 0, sizeof(floodVisitedCA));
+  BfsNode queue[ROOM_W * ROOM_H];
+  int head = 0, tail = 0;
+  queue[tail++] = {sx, sz};
+  floodVisitedCA[sz][sx] = true;
+  int count = 0;
+  while (head < tail) {
+    BfsNode cur = queue[head++];
+    count++;
+    const int d4x[] = {0, 1, 0, -1}, d4z[] = {-1, 0, 1, 0};
+    for (int d = 0; d < 4; d++) {
+      int nx = cur.x + d4x[d], nz = cur.z + d4z[d];
+      if (nx < 0 || nx >= ROOM_W || nz < 0 || nz >= ROOM_H)
+        continue;
+      if (floodVisitedCA[nz][nx] || roomMap[nz][nx] == '#')
+        continue;
+      floodVisitedCA[nz][nx] = true;
+      queue[tail++] = {nx, nz};
+    }
+  }
+  return count;
+}
+
+static void removeDisconnected(int sx, int sz) {
+  floodFillFrom(sx, sz);
+  for (int z = 1; z < ROOM_H - 1; z++)
+    for (int x = 1; x < ROOM_W - 1; x++)
+      if (roomMap[z][x] == '.' && !floodVisitedCA[z][x])
+        roomMap[z][x] = '#';
+}
+
+static void clearCircle(int cx, int cz, int radius) {
+  for (int dz = -radius; dz <= radius; dz++)
+    for (int dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dz * dz > radius * radius)
+        continue;
+      int x = cx + dx, z = cz + dz;
       if (x > 0 && x < ROOM_W - 1 && z > 0 && z < ROOM_H - 1)
         roomMap[z][x] = '.';
     }
+}
 
-  // Clear door area
-  for (int dx = -3; dx <= 3; dx++) {
-    int x = ROOM_W / 2 + dx;
-    if (x > pad && x < ROOM_W - pad)
-      roomMap[pad][x] = '.';
-    if (x > pad && x < ROOM_W - pad)
-      roomMap[pad + 1][x] = '.';
+static void carveTunnel(int x1, int z1, int x2, int z2) {
+  int x = x1, z = z1;
+  while (x != x2 || z != z2) {
+    if (x > 0 && x < ROOM_W - 1 && z > 0 && z < ROOM_H - 1) {
+      roomMap[z][x] = '.';
+      if (x + 1 < ROOM_W - 1)
+        roomMap[z][x + 1] = '.';
+      if (z + 1 < ROOM_H - 1)
+        roomMap[z + 1][x] = '.';
+    }
+    if (x != x2)
+      x += (x2 > x) ? 1 : -1;
+    else if (z != z2)
+      z += (z2 > z) ? 1 : -1;
   }
 }
 
-static int spawnEnemies(Enemy enemies[], int depth, bool isBoss, int pad) {
+// ════════════════════════════════════════
+//  ENEMY SPAWNING
+// ════════════════════════════════════════
+
+static int spawnEnemies(Enemy enemies[], int depth, bool isBoss) {
   int count = 0;
 
   if (isBoss) {
-    enemies[count].pos = Vec2(ROOM_W / 2.0f, ROOM_H / 2.0f - 2.0f);
+    enemies[count].pos = Vec2(ROOM_W / 2.0f, ROOM_H / 2.0f);
     enemies[count].type = ENEMY_BOSS;
     enemies[count].maxHealth = 15.0f + depth * 3.0f;
     enemies[count].health = enemies[count].maxHealth;
@@ -207,8 +226,14 @@ static int spawnEnemies(Enemy enemies[], int depth, bool isBoss, int pad) {
     if (extras > 4)
       extras = 4;
     for (int i = 0; i < extras && count < MAX_ENEMIES; i++) {
-      enemies[count].pos =
-          Vec2(randf(pad + 1, ROOM_W - pad - 1), randf(pad + 1, ROOM_H / 2.0f));
+      // Find walkable position
+      for (int att = 0; att < 30; att++) {
+        float ex = randf(2, ROOM_W - 2), ez = randf(2, ROOM_H / 2.0f);
+        if (canMove(ex, ez, 0.3f)) {
+          enemies[count].pos = Vec2(ex, ez);
+          break;
+        }
+      }
       enemies[count].type = ENEMY_CHASER;
       enemies[count].maxHealth = 2.0f;
       enemies[count].health = 2.0f;
@@ -228,6 +253,7 @@ static int spawnEnemies(Enemy enemies[], int depth, bool isBoss, int pad) {
     return count;
   }
 
+  // Normal room
   int numChasers = 4 + depth;
   int numShooters = depth >= 1 ? 1 + depth / 2 : 0;
   int numTanks = depth >= 3 ? 1 + (depth - 3) / 3 : 0;
@@ -238,9 +264,9 @@ static int spawnEnemies(Enemy enemies[], int depth, bool isBoss, int pad) {
   for (int i = 0; i < total && count < MAX_ENEMIES; i++) {
     Enemy &e = enemies[count];
     e.pos = Vec2(ROOM_W / 2.0f, ROOM_H / 2.0f);
-    for (int attempt = 0; attempt < 30; attempt++) {
-      float ex = randf(pad + 1, ROOM_W - pad - 1);
-      float ez = randf(pad + 1, ROOM_H * 0.65f);
+    for (int att = 0; att < 40; att++) {
+      float ex = randf(2, ROOM_W - 2);
+      float ez = randf(2, ROOM_H * 0.7f);
       if (canMove(ex, ez, 0.3f)) {
         e.pos = Vec2(ex, ez);
         break;
@@ -280,35 +306,75 @@ static int spawnEnemies(Enemy enemies[], int depth, bool isBoss, int pad) {
   return count;
 }
 
+// ════════════════════════════════════════
+//  ROOM GENERATION (main entry)
+// ════════════════════════════════════════
+
 void generateRoom(int depth, bool isBoss, Enemy enemies[], int &numEnemies,
                   Vec2 &playerStart) {
-  fillWalls();
+  // Fill with walls + null terminators
+  for (int z = 0; z < ROOM_H; z++) {
+    for (int x = 0; x < ROOM_W; x++)
+      roomMap[z][x] = '#';
+    roomMap[z][ROOM_W] = '\0';
+  }
 
-  int pad = 3 - depth / 3;
-  if (pad < 1)
-    pad = 1;
+  // Random noise (wall density varies by depth)
+  float wallChance = isBoss ? 0.35f : (0.38f + depth * 0.008f);
+  if (wallChance > 0.46f)
+    wallChance = 0.46f;
+
+  for (int z = 1; z < ROOM_H - 1; z++)
+    for (int x = 1; x < ROOM_W - 1; x++)
+      roomMap[z][x] = (randf(0, 1) < wallChance) ? '#' : '.';
+
+  // Cellular automata smoothing
+  int passes = isBoss ? 3 : (4 + randi(0, 1));
+  for (int p = 0; p < passes; p++)
+    smoothPass();
+
+  // Key locations
+  int spawnX = ROOM_W / 2, spawnZ = ROOM_H - 3;
+  int doorZ = 2;
+
+  // Clear spawn and door areas
+  clearCircle(spawnX, spawnZ, 2);
+  clearCircle(ROOM_W / 2, doorZ, 2);
   if (isBoss)
-    pad = 1;
+    clearCircle(ROOM_W / 2, ROOM_H / 2, 4);
 
-  carveArena(depth);
+  // Guarantee connectivity
+  carveTunnel(spawnX, spawnZ, ROOM_W / 2, doorZ);
+  removeDisconnected(spawnX, spawnZ);
 
-  int obstacles = isBoss ? randi(3, 5) : randi(4, 6 + depth / 2);
-  if (obstacles > 10)
-    obstacles = 10;
-  placeObstacles(obstacles, pad);
+  // Ensure enough floor space
+  int floorCount = 0;
+  for (int z = 1; z < ROOM_H - 1; z++)
+    for (int x = 1; x < ROOM_W - 1; x++)
+      if (roomMap[z][x] == '.')
+        floorCount++;
 
-  playerStart = Vec2(ROOM_W / 2.0f, ROOM_H - pad - 1.5f);
-  numEnemies = spawnEnemies(enemies, depth, isBoss, pad);
+  if (floorCount < 60) {
+    for (int i = 0; i < 3; i++) {
+      int cx = randi(3, ROOM_W - 4), cz = randi(3, ROOM_H - 4);
+      clearCircle(cx, cz, 2);
+      carveTunnel(spawnX, spawnZ, cx, cz);
+    }
+    removeDisconnected(spawnX, spawnZ);
+  }
+
+  playerStart = Vec2(spawnX + 0.5f, spawnZ + 0.5f);
+  numEnemies = spawnEnemies(enemies, depth, isBoss);
 }
+
+// ════════════════════════════════════════
+//  DOOR SETUP
+// ════════════════════════════════════════
 
 int setupDoors(Door doors[], int depth) {
   int numDoors = (depth % 5 == 4) ? 1 : randi(2, 3);
   if (numDoors > MAX_DOORS)
     numDoors = MAX_DOORS;
-
-  int pad = 3 - depth / 3;
-  if (pad < 1)
-    pad = 1;
 
   BoonType used[MAX_DOORS] = {};
   for (int i = 0; i < numDoors; i++) {
@@ -322,15 +388,27 @@ int setupDoors(Door doors[], int depth) {
           unique = false;
     } while (!unique);
     used[i] = b;
-
     doors[i].reward = b;
     doors[i].active = true;
 
-    float roomLeft = (float)(pad + 1);
-    float roomRight = (float)(ROOM_W - pad - 1);
-    float spacing = (roomRight - roomLeft) / (numDoors + 1);
-    float dx = roomLeft + spacing * (i + 1);
-    doors[i].pos = Vec2(dx, (float)(pad) + 0.5f);
+    // Place doors along upper wall area, find walkable spots
+    float spacing = (float)(ROOM_W - 4) / (numDoors + 1);
+    float dx = 2.0f + spacing * (i + 1);
+    // Find closest walkable cell near door position
+    int bestX = (int)dx, bestZ = 2;
+    for (int dz = 1; dz < 5; dz++)
+      for (int ddx = -2; ddx <= 2; ddx++) {
+        int tx = (int)dx + ddx, tz = dz;
+        if (tx > 0 && tx < ROOM_W - 1 && tz > 0 && tz < ROOM_H - 1) {
+          if (roomMap[tz][tx] == '.') {
+            bestX = tx;
+            bestZ = tz;
+            dz = 99;
+            break; // Found it
+          }
+        }
+      }
+    doors[i].pos = Vec2(bestX + 0.5f, bestZ + 0.5f);
     doors[i].wallSide = 0;
   }
   return numDoors;
